@@ -30,12 +30,16 @@ class UsersWP_Social {
 	    add_action( 'login_enqueue_scripts', array( $this,'login_styles' ) );
 	    add_action( 'init', array($this, 'load_textdomain') );
         add_action('uwp_social_after_wp_insert_user', array($this, 'admin_notification'), 10, 2);
+        add_action('uwp_social_after_wp_insert_user', array($this, 'set_user_type_from_form'), 5, 3);
         add_action('login_form', array($this, 'admin_login_form'));
         add_action('register_form', array($this, 'admin_register_form'));
         add_action('uwp_options_for_translation', array($this, 'uwp_add_options_for_translation'));
         add_action('template_redirect', array($this, 'required_fields_redirect'));
         add_action('uwp_after_process_account', array($this, 'remove_transient_on_account_submission'), 10, 2);
         add_action('uwp_template_display_notices', array($this, 'template_display_notices'));
+        
+        add_filter('uwp_social_login_button_url', array($this, 'add_form_id_to_social_url'), 10, 3);
+        add_action('uwp_social_authenticate_start', array($this, 'store_form_id_in_transient'));
 
         add_action('uwp_clear_user_php_session', 'uwp_social_destroy_session_data');
         add_action('wp_logout', 'uwp_social_destroy_session_data');
@@ -148,7 +152,8 @@ class UsersWP_Social {
     public function social_login_buttons_on_templates($type, $args) {
 	    if ($type == 'register') {
 		    $data = array();
-		    $data['uwp_register_form_id'] = ! empty( $args['id'] ) ? $args['id'] : 1;
+		    $form_id = ! empty( $args['id'] ) ? absint( $args['id'] ) : 1;
+		    $data['uwp_register_form_id'] = $form_id;
 		    $redirect_page_id = uwp_get_option( 'register_redirect_to' );
 		    if ( !isset( $_REQUEST['redirect_to'] ) && isset( $redirect_page_id ) && (int) $redirect_page_id == - 1 && wp_get_referer() ) {
 			    $redirect_to = esc_url( wp_get_referer() );
@@ -157,8 +162,13 @@ class UsersWP_Social {
 			    $redirect_to = $uwp_forms->get_register_redirect_url( $data, false );
 		    }
 
+		    // Store form_id in a filterable way for the template
+		    add_filter('uwp_social_register_form_id', function() use ($form_id) {
+			    return $form_id;
+		    }, 10);
+
 		    ob_start();
-		    echo do_shortcode('[uwp_social type="register" redirect_to="'.$redirect_to.'"]');
+		    echo do_shortcode('[uwp_social type="register" form_id="'.$form_id.'" redirect_to="'.$redirect_to.'"]');
 		    echo ob_get_clean();
 	    } else {
 		    $data = array();
@@ -348,7 +358,11 @@ class UsersWP_Social {
     }
 
     /**
-     * Check if user has completed all required fields
+     * Check if user has completed all required fields.
+     * 
+     * @param int $user_id The user ID.
+     * @param array $required_fields The required fields.
+     * @return bool True if user has completed all required fields, false otherwise.
      */
     public function user_has_completed_required_fields($user_id, $required_fields) {
         if (empty($required_fields)) {
@@ -378,8 +392,14 @@ class UsersWP_Social {
         return true;
     }
 
-    // Remove the notice after successful form submission
-    function remove_transient_on_account_submission($data, $user_id){
+    /**
+     * Remove transient on account submission.
+     * 
+     * @param array $data The data submitted.
+     * @param int $user_id The user ID.
+     * @return void
+     */
+    public function remove_transient_on_account_submission($data, $user_id){
         delete_transient('uwp_social_profile_incomplete_' . $user_id);
     }
 
@@ -396,6 +416,83 @@ class UsersWP_Social {
                         'content' => __('Please complete all required fields below to finish setting up your profile.', 'uwp-social'),
                     )
                 );
+            }
+        }
+    }
+
+    /**
+     * Add form_id to social login URL via filter
+     *
+     * @param string $url The social login URL.
+     * @param string $provider_id The provider ID.
+     * @param array $args Template arguments.
+     * @return string Modified URL.
+     */
+    public function add_form_id_to_social_url($url, $provider_id, $args) {
+        $form_id = ! empty( $args['form_id'] ) ? absint( $args['form_id'] ) : 1;
+        
+        if ( $form_id > 0 ) {
+            $url = add_query_arg( 'uwp_register_form_id', $form_id, $url );
+        }
+        
+        return $url;
+    }
+
+    /**
+     * Store form_id in transient when authentication starts.
+     * 
+     * @return void
+     */
+    public function store_form_id_in_transient() {
+        if ( isset( $_REQUEST['uwp_register_form_id'] ) && ! empty( $_REQUEST['uwp_register_form_id'] ) ) {
+            $form_id = absint( $_REQUEST['uwp_register_form_id'] );
+            $provider = isset( $_REQUEST['provider'] ) ? sanitize_text_field( $_REQUEST['provider'] ) : '';
+            
+            if ( ! empty( $form_id ) && ! empty( $provider ) ) {
+                if ( ! session_id() ) {
+                    session_start();
+                }
+                $_SESSION['uwp_social']['uwp_register_form_id'] = $form_id;
+            }
+        }
+    }
+
+    /**
+     * Set user type from form_id when user is created via social login.
+     *
+     * @param int $user_id The newly created user ID.
+     * @param string $provider The social provider.
+     * @param object $hybridauth_user_profile The user profile from provider.
+     * @return void
+     */
+    public function set_user_type_from_form($user_id, $provider, $hybridauth_user_profile) {
+        if ( ! absint( $user_id ) ) {
+            return;
+        }
+
+        $form_id = 0;
+
+        if ( isset( $_REQUEST['uwp_register_form_id'] ) && ! empty( $_REQUEST['uwp_register_form_id'] ) ) {
+            $form_id = absint( $_REQUEST['uwp_register_form_id'] );
+        } else {
+            if ( ! session_id() ) {
+                session_start();
+            }
+            
+            if ( isset( $_SESSION['uwp_social']['uwp_register_form_id'] ) ) {
+                $form_id = absint( $_SESSION['uwp_social']['uwp_register_form_id'] );
+                unset( $_SESSION['uwp_social']['uwp_register_form_id'] );
+            }
+        }
+
+        if ( ! empty( $form_id ) && $form_id > 0 ) {
+            if ( function_exists( 'uwp_get_user_register_form' ) ) {
+                $form = uwp_get_user_register_form( $form_id );
+                if ( $form && isset( $form['id'] ) ) {
+                    update_user_meta( $user_id, '_uwp_register_form_id', $form_id );
+                }
+            } else {
+                update_user_meta( $user_id, '_uwp_register_form_id', $form_id );
             }
         }
     }

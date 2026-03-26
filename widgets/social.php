@@ -48,6 +48,15 @@ class UWP_Social_Login_Widget extends WP_Super_Duper {
 	                'desc_tip' => true,
 	                'advanced' => true
                 ),
+                'form_id' => array(
+	                'type' => 'number',
+	                'title' => __('Form ID:', 'uwp-social'),
+	                'desc' => __('Registration form ID for user type assignment.', 'uwp-social'),
+	                'placeholder' => '',
+	                'default' => '',
+	                'desc_tip' => true,
+	                'advanced' => true
+                ),
             )
 
         );
@@ -72,9 +81,20 @@ class UWP_Social_Login_Widget extends WP_Super_Duper {
 
         echo '</div>';
 
-        $output = ob_get_clean();
+        ?>
+        <script type="text/javascript">
+            jQuery(document).on('uwp_form_loaded', function(event, args){
+                const html = args.html;
+                const form = args.form;
+                const formWrapper = form.closest('.uwp_widget_register');
 
-        return trim($output);
-
+                const socialHtml = jQuery(html).find('.uwp_widget_social_login');
+                if (socialHtml.length > 0) {
+                    formWrapper.find('.uwp_widget_social_login').replaceWith(socialHtml);
+                }
+            });
+        </script>
+        <?php
+        return ob_get_clean();
     }
 }

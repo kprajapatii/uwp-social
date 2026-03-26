@@ -27,6 +27,8 @@ if(isset($providers) && count($providers) > 0) {
 				$url .= '&redirect_to=' . $redirect_to;
 			}
 
+			$url = apply_filters( 'uwp_social_login_button_url', $url, $provider_id, $args );
+
 			//General |Facebook |Twitter |LinkedIn |Instagram |Yahoo |WordPress |VKontakte
 			$icons = array(
 				'facebook'  => 'fab fa-facebook-f',
