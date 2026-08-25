@@ -3,7 +3,7 @@ Contributors: stiofansisland, paoltaia, ayecode
 Donate link: http://userswp.io/
 Tags: social login, facebook login, google login, twitter login, X login, linkedIn login, login, woocommerce login, facebook, twitter, X, google, social network login, social plugin, userswp
 Requires at least: 6.1
-Tested up to: 7.0
+Tested up to: 7.1
 Stable tag: 1.5.9
 License: GPLv3
 License URI: http://www.gnu.org/licenses/gpl-3.0.html
@@ -17,6 +17,10 @@ Social Login addon for [UsersWP](https://wordpress.org/plugins/userswp/).
 This addon lets your user to register and login with popular sites like Facebook, Google, X, LinkedIn, Yahoo, WordPress etc.
 
 100% translatable.
+
+== Security ==
+
+To report a security vulnerability, please review our [vulnerability disclosure policy](https://ayecode.io/vulnerability-disclosure-policy/).
 
 == Installation ==
 
