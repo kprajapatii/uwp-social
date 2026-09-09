@@ -222,6 +222,53 @@ function uwp_social_get_provider_adapter( $provider_id ) {
 	return $adapter;
 }
 
+/**
+ * Resolve the provider-confirmed email address for a hybridauth profile.
+ *
+ * `emailVerified` is treated strictly as a "the provider vouches this
+ * identity owns the address" flag, never as a fallback value. Bundled
+ * hybridauth adapters normalise this field inconsistently across providers,
+ * so both shapes seen in the wild are handled here rather than by patching
+ * adapters under vendor/ (which would be lost on a library update):
+ *
+ *   - a plain boolean (e.g. LinkedIn OIDC's raw `email_verified` claim):
+ *     `true` confirms the profile's own `email` field, `false`/absent does not.
+ *   - a string (Google/WordPress.com style): only confirms when it's a valid
+ *     email AND matches the profile's `email` field exactly. Anything else
+ *     (empty, a mismatched address) means "not confirmed".
+ *
+ * Either way, the raw, unconfirmed email must NOT be used to resolve or
+ * authenticate an existing account.
+ *
+ * @param object $hybridauth_user_profile Hybridauth user profile object.
+ * @param string $hybridauth_user_email   Sanitized raw email from the profile.
+ *
+ * @return string The verified email address, or '' if it isn't confirmed.
+ */
+function uwp_social_get_verified_email( $hybridauth_user_profile, $hybridauth_user_email ) {
+	if ( '' === $hybridauth_user_email ) {
+		return '';
+	}
+
+	$email_verified = isset( $hybridauth_user_profile->emailVerified ) ? $hybridauth_user_profile->emailVerified : null;
+
+	if ( is_bool( $email_verified ) ) {
+		return $email_verified ? $hybridauth_user_email : '';
+	}
+
+	if ( empty( $email_verified ) || ! is_email( $email_verified ) ) {
+		return '';
+	}
+
+	$asserted_verified_email = sanitize_email( $email_verified );
+
+	if ( strtolower( $asserted_verified_email ) !== strtolower( $hybridauth_user_email ) ) {
+		return '';
+	}
+
+	return $hybridauth_user_email;
+}
+
 function uwp_social_get_user_data( $provider, $redirect_to ) {
 	do_action( "uwp_social_get_user_data_start", $provider, $redirect_to );
 
@@ -246,7 +293,7 @@ function uwp_social_get_user_data( $provider, $redirect_to ) {
 	$adapter = uwp_social_get_provider_adapter( $provider );
 
 	$hybridauth_user_email          = isset( $hybridauth_user_profile->email ) ? sanitize_email( $hybridauth_user_profile->email ) : '';
-	$hybridauth_user_email_verified = isset( $hybridauth_user_profile->emailVerified ) && is_email( $hybridauth_user_profile->emailVerified ) ? sanitize_email( $hybridauth_user_profile->emailVerified ) : $hybridauth_user_email;
+	$hybridauth_user_email_verified = uwp_social_get_verified_email( $hybridauth_user_profile, $hybridauth_user_email );
 
 
 	// check if user already exist in uwp social profiles
@@ -259,7 +306,7 @@ function uwp_social_get_user_data( $provider, $redirect_to ) {
 	// if not found in uwp social profiles, then check his verified email
 	if ( ! $user_id && ! empty( $hybridauth_user_email_verified ) ) {
 		// check if the verified email exist in wp_users
-		$user_id = (int) uwp_email_exists( $hybridauth_user_email );
+		$user_id = (int) uwp_email_exists( $hybridauth_user_email_verified );
 
 		// the user exists in WordPress
 		$wordpress_user_id = $user_id;
@@ -276,7 +323,11 @@ function uwp_social_get_user_data( $provider, $redirect_to ) {
 			return uwp_social_render_notice( array('message' => __( "Registration is now closed.", 'uwp-social' )) );
 		}
 
-		if ( ! is_email( $hybridauth_user_email_verified ) ) {
+		// Note: this only checks that the provider gave us *an* email address
+		// at all, not that it's verified. An unverified address still needs
+		// to go through the registration/account-linking gateway below
+		// rather than being used to silently resolve an existing account.
+		if ( ! is_email( $hybridauth_user_email ) ) {
 			$incorrect_email_error_msg = apply_filters( 'uwp_incorrect_email_error_msg', __( 'The email address isn&#8217;t correct.', 'uwp-social' ) );
 
 			return uwp_social_render_notice( array('message' => $incorrect_email_error_msg) );
@@ -555,6 +606,11 @@ function uwp_social_authenticate_user( $user_id, $provider, $redirect_to, $adapt
 	// Set WP auth cookie
 	wp_set_auth_cookie( $user_id, true );
 
+	// The cached hybridauth profile/tokens have now been consumed to issue a
+	// session; clear them so a replayed request can't reuse them to mint
+	// another auth cookie without a fresh round trip to the provider.
+	do_action( 'uwp_clear_user_php_session' );
+
 	if ( $wp_user ) {
 		$user_login = isset( $wp_user->user_login ) ? $wp_user->user_login : '';
 		do_action( 'wp_login', $user_login, $wp_user );
@@ -577,7 +633,7 @@ function uwp_social_new_users_gateway( $provider, $redirect_to, $hybridauth_user
 	remove_action( 'register_form', 'uwp_render_auth_widget_in_wp_register_form' );
 
 	$hybridauth_user_email          = isset( $hybridauth_user_profile->email ) ? sanitize_email( $hybridauth_user_profile->email ) : '';
-	$hybridauth_user_email_verified = isset( $hybridauth_user_profile->emailVerified ) && is_email($hybridauth_user_profile->emailVerified) ? sanitize_email( $hybridauth_user_profile->emailVerified ) : $hybridauth_user_email;
+	$hybridauth_user_email_verified = uwp_social_get_verified_email( $hybridauth_user_profile, $hybridauth_user_email );
 	$hybridauth_user_login          = isset( $hybridauth_user_profile->displayName ) ? sanitize_user( $hybridauth_user_profile->displayName, true ) : '';
 	$hybridauth_user_avatar         = isset( $hybridauth_user_profile->photoURL ) ? esc_url( $hybridauth_user_profile->photoURL ) : '';
 
